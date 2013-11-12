@@ -36,8 +36,8 @@ Draft for new classes in AVR code
         class tempToPredictiveOnOff1{
             -OvershootEstimator
         }
-        class tempToPredictiveOnOff2{
-            -OvershootEstimator
+        class tempDiffToPwmVal3{
+            -degreesInFullRange
         }
         class tempDiffToPwmVal1{
             -degreesInFullRange
@@ -74,9 +74,9 @@ Draft for new classes in AVR code
     tempToPidTemp2-->setPointController:temp
 
     setPointController-->tempToPredictiveOnOff1:temp
-    setPointController-->tempToPredictiveOnOff2:temp
+    setPointController-->tempDiffToPwmVal3:tempdiff
 
-    tempToPredictiveOnOff1-->chamberHeater
-    tempToPredictiveOnOff2-->chamberCooler
+    tempDiffToPwmVal3-->chamberHeater
+    tempToPredictiveOnOff1-->chamberCooler
 
     fridgeSensor-->setPointController
