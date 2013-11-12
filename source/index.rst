@@ -71,6 +71,8 @@ This part of conf.py will set the PlantUML command for you.
 
 Finally, install the python package sphinxcontrib-plantuml, for example with the python package manager in IDEA.
 
-.. .. toctree::
+.. toctree::
     :maxdepth: 2
     :numbered: 2
+
+    new-classes-draft
