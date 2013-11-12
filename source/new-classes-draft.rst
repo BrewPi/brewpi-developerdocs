@@ -45,7 +45,8 @@ Draft for new classes in AVR code
         class tempDiffToPwmVal2{
             -degreesInFullRange
         }
-        class minimum{
+        class setPointController{
+            -type<<min,max,avg>>
         }
     }
 
@@ -69,11 +70,13 @@ Draft for new classes in AVR code
     beer1Sensor-->tempToPidTemp1:filters,setpoint
     beer2Sensor-->tempToPidTemp2:filters,setpoint
 
-    tempToPidTemp1-->minimum:temp
-    tempToPidTemp2-->minimum:temp
+    tempToPidTemp1-->setPointController:temp
+    tempToPidTemp2-->setPointController:temp
 
-    minimum-->tempToPredictiveOnOff1:temp
-    minimum-->tempToPredictiveOnOff2:temp
+    setPointController-->tempToPredictiveOnOff1:temp
+    setPointController-->tempToPredictiveOnOff2:temp
 
     tempToPredictiveOnOff1-->chamberHeater
     tempToPredictiveOnOff2-->chamberCooler
+
+    fridgeSensor-->setPointController
