@@ -11,6 +11,7 @@ PlantUML also requires `Graphviz <http://plantuml.sourceforge.net/graphvizdot.ht
 With PlantUML we can make pretty UML diagrams like this:
 
 .. uml::
+
     class BasicTempSensor{
         +isConnected()
         +init()
