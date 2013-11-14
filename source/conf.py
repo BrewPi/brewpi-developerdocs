@@ -25,11 +25,19 @@ import sys, os
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = ['sphinxcontrib.plantuml', 'sphinx.ext.autodoc', 'sphinx.ext.doctest', 'sphinx.ext.intersphinx', 'sphinx.ext.todo', 'sphinx.ext.coverage', 'sphinx.ext.pngmath', 'sphinx.ext.ifconfig', 'sphinx.ext.viewcode']
+extensions = ['breathe', 'sphinxcontrib.plantuml', 'sphinx.ext.autodoc', 'sphinx.ext.doctest', 'sphinx.ext.intersphinx', 'sphinx.ext.todo', 'sphinx.ext.coverage', 'sphinx.ext.pngmath', 'sphinx.ext.ifconfig', 'sphinx.ext.viewcode']
 
+# this bit needs improvement to be more platform independent
 if sys.platform.startswith('win'):
     plantuml = 'java -jar plantuml.jar'
+    # assume this project brewpi-avr project are in same dir
+    xmlpath = os.path.abspath(os.path.join(os.path.dirname( __file__ ), '..', '..', 'brewpi-avr/doxygen/xml/'))
+    breathe_projects = { "brewpi-avr": str(xmlpath) }
+else:
+    breathe_projects = { "brewpi-avr": "/var/lib/jenkins/jobs/brewpi-avr-doxygen/htmlreports/brewpi-avr-doxygen-xml" } # assume built by jenkins
 
+
+breathe_default_project = "brewpi-avr"
 plantuml_output_format = 'svg'
 
 # Add any paths that contain templates here, relative to this directory.
