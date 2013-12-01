@@ -11,6 +11,7 @@ PlantUML also requires `Graphviz <http://plantuml.sourceforge.net/graphvizdot.ht
 With PlantUML we can make pretty UML diagrams like this:
 
 .. uml::
+
     class BasicTempSensor{
         +isConnected()
         +init()
@@ -68,8 +69,18 @@ This part of conf.py will set the PlantUML command for you.
     if sys.platform.startswith('win'):
         plantuml = 'java -jar plantuml.jar'
 
-Finally, install the python package sphinxcontrib-plantuml, for example with the python package manager in IDEA.
+Finally, install the python package sphinxcontrib-plantuml, for example with the python package manager in IDEA or pip.
 
-.. .. toctree::
+Setup Doxygen, Breathe
+----------------------
+
+1. Install doxygen
+#. Install breathe through pip.
+
+
+.. toctree::
     :maxdepth: 2
     :numbered: 2
+
+    new-classes-draft
+    doxygentest
