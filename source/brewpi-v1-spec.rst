@@ -56,12 +56,12 @@ The service layer logs data into a database.
 
 .. uml::
 
-    cloud "Hardware Controllers"{
+    cloud "Hardware Controllers" as hardware{
         [Embedded device 1] as ed1
         [Embedded device 2] as ed2
     }
 
-    cloud "Clients"{
+    cloud "Clients" as clients{
         [Web Front End] as frontend
         [Android / iOS App] as app
         [Third party app] as thirdparty
