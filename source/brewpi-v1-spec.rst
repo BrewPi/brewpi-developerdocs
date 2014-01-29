@@ -55,6 +55,7 @@ The service layer provides a RESTful API for other services to connect to.
 The service layer logs data into a database.
 
 .. uml::
+
     cloud "Hardware Controllers"{
         [Embedded device 1] as ed1
         [Embedded device 2] as ed2
