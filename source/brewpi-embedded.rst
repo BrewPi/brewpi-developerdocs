@@ -1,3 +1,4 @@
+=======================
 BrewPi Embedded Devices
 =======================
 First draft proposal by Matthew McGowan
@@ -8,82 +9,340 @@ This is not intended to be a full spec, but a indication of thoughts and directi
 
 Some key goals of the controller:
 
-- flexible configuration of controller entities - sensors, actuators, controllers, etc..
+- flexible configuration of various types of controller entities - sensors, actuators, controllers, etc..
 - flexible configuration of non-controller elements - input/output devices such as encoders, displays etc.
 - dynamic discovery of connected devices (I2C/Onewire)
+- small footprint
 
 
-Entities
---------
-An entity defines a building block in the controller - maybe we call it Controller Object, or simply object.  Examples
-are
+High-Level View
+---------------
+
+The high-level view of the brewpi embedded device is this:
+- a microcontroller, with connections to various types of hardware (sensors, actuators, I/O devices)
+- the control loop:
+-- read devices
+-- compute values and actions (control response)
+-- update devices
+-- log values
+- a communciations interface that allows programmatic access to the controller
+- self-standing: once configured, the device can continue providing service without external influences
+- persistence: object definitions and some key values persist and are maintained after power cycle
+
+Comms Interface
+---------------
+
+The Comms interface is an abstraction of a communications channel that allows the controller to be interacted with by
+an external source. The Comms interface is a channel through which data can be sent and received to/from the controller.
+
+In practice, the comms interface will take these forms:
+- arduino uno/leonardo: virtual Serial data at 57600 baud over the USB port
+- spark core (wired): virtual Serial data at 57600 baud over the USB port
+- spark core (wireless): TCP server running on the spark core
+- desktop simulator: stdin/stdout to process
+
+
+Objects
+-------
+
+An Object defines a building block in the controller - it defines something that we want to work with in the controller.
+Everything that is manipulated in the controller is represented as an object. Examples are:
 
  * Hardware Sensors (Temp, switch)
  * hardware actuators (digital pin on/off, digital pwm (fast), analog pin, onewire),
  * functional actuators (predictive, pwm (slow), heat-cool-composite),
  * functional temp sensors (filtering), controllers
  * controllers (pid, on/off, thermo-model, etc..)
+ * UX input devices: rotary encoder (keypad, etc...)
+ * UX output devices: LCD display, buzzer
+ * Process Values
 
 This list isn't exhaustive - just to illustrate that there are many types of objects.
 
-A key goal of the SPI is to allow these objects to be instantiated, and configured, and for each object to be assigned
-an Id that is used to further identify it externally.
+A key goal of the controller and the comms interface is to allow these objects to be instantiated, and configured,
+and for each object to be assigned a unique ID. Each object that is externally visible has a unique ID.
+The ID is specified when interacting with that object. More on IDs later.
 
-Some objects are themselves values - e.g. temp sensors and actuators expose a default value that is the temperature or
-actuator setting. Objects may also contain values, for example, a temp sensor may expose values for adjusting calibration.
-More complex examples are many values reported by a controller or used for configuration of the controller.
+Containers
+----------
+A container is itself an object, and maintains logical grouping of (sub)objects. All objects in the controller exist in a container
+- it's not possible for an object to exist outside a container.
 
-The external IDs are assigned by the arduino as each object is instantiated. These are top-level IDs, 1, 2, 3.. etc..
-In essence, there is a hidden top-level container to which objects are added to by default.
-If the object added it also itself a container, then it exposes it's contained entities via sub-ids, e.g. 2.1 references the first contained entity in object 2.
+Objects are stored in the container at a particular index, starting with 0. Objects can be added to the container and use
+ a container-chosen index (the next one that is free) or the object can be assigned to a specific index in the container,
+ replacing any object previously existing at that location.
 
-At a high-level the protocol allows the client to specify which objects to instantiate, and returns the ID - in pseudo-code::
+Once an object is added to a container, it maintains the same index until that object is removed. Even if objects at lower
+ indexes are removed, this has no bearing on the indexes of other objects in the container.
 
-    ts_id = create(type=temp_sensor, args=...)
+The Root Container
+------------------
+We have a chicken and egg problem: the system mandates each object
+is hosted in a container, but then you can't create that container without already having a container to put it in!
 
-Which objects provide sub-objects is part of the documentation for that object type.
+The system provides the root container to bootstrap object creation.
+This is a generic container object that contains all top-level objects. Since
+these top-level objects can also be containers, the system can be used to build nested containment, i.e. a hierarchy.
 
-Wiring Objects
---------------
 
-To wire objects together to create relationships is done by passing the related object's id as a parameter, e.g.
+Object IDs
+----------
+The objects created in the controller exist in the memory space of the controller.
+To allow external access to these objects via the Comms interface, each object needs an ID. Since most object definitions
+ are persistent (surviving power cycles) the ID of an object should also survive power-cycles.
 
-    pid_id= create(type=pid_controller, temp_sensor=ts_id, etc....)
+The ID scheme used is based on the container hierarchy. The ID of an object is the object's index in it's host container,
+appended after the host container's ID. The root container is always implicit, and is not included in the ID.
 
-Note that I write this conceptually as a function call. In the serial comms protocol, it will be a separate send and
-asynchronous response. The response includes the assigned external ID for the created object, plus enough info from the
-original command so the caller can identify which request it belongs to.
+For example
+    - ``5``: a top-level object stored at index 5 (in the root container)
+    - ``2.3`` : an object stored at index 3 in a container at index '2' in the root.
 
-Persistence
------------
-As each object is created, the same command used to create it is stored in eeprom. This allows all objects to be re-instantiated
-when the controller powers up.
-
+Hence, each object in the system has an ID. In cases where the containers are reconstructed from eeprom
 
 Values
 ------
-With a controller, values are a key element in the problem domain. Values represent set points, process values,
-manipulated values, configuration etc..
+Values are a central concept in a controller. Values represent sensor readings, configuration details, set points, controller state
+etc..
 
+Values are a type of object (so they have an ID). This means values may
+represent a simple variable (such as a configuration value/process variable) or a value derived externally, such as a sensor reading.
 Values may be readable/writable or both. Values are abstracted to provide independence from how the value is computed,
-and how the system reacts when that value is assigned.  Values are optionally readable,
-and writable. They're readable/writable state is dynamic and may change at runtime.  Values may change readable/writable
-state according to the state of other objects in the system. For example, currently, fridge SV changes from a writable value
-in fridge constant mode, to a read-only value in beer constant mode. Similarly, beer_sv changes from readable/writable
-in beer_constnat mode, to not readable nor writable (unused) in fridge constant mode.
+and how the system reacts when that value is assigned.  Values are readable,
+and optionally writable.
+
+All items of interest in the controller that can be logged or manipulated are represented as values.
+
+
+
+Comms Interface Format
+----------------------
+The comms interface format has been chosen to be both readable (to developers) and easy to parse:
+
+- text-based format so it can be easily printed and entered using a terminal
+- data bytes are hex-encoded, for example, the byte 255 is streamed as the text FF
+- whitespace can be freely inserted (they are ignored)
+- annotations delimiters [ ] can be freely inserted (they and the contents between are ignored)
+- chunk-based newlines terminate the command.
+
+The core data format used by the embedded device is binary, but it is transmitted as ASCII to avoid encoding issues
+and to make it representable on a terminal. Furthermore, text strings can be liberally inserted
+
+A newline is used to terminate a block (a command). Not only does this help with readability, but also ensures that
+the system can recover from a dropped byte or synchronization problem from the start of the next command.
+
+Requests
+````````
+Requests are sent to the controller via the inbound comms interface stream. The format for the request is
+
+    request-id  1   hex-encoded byte              This is the identifier for the request
+    request-data [variable length] hex-encoded bytes
+    newline
+
+These requests are supported::
+
+   	CMD_READ_VALUE = 1,			// read a value
+   	CMD_WRITE_VALUE = 2,		// write a value
+   	CMD_CREATE_OBJECT = 3,		// add object in a container
+   	CMD_DELETE_OBJECT = 4,		// delete the object at the specified location
+   	CMD_LIST_OBJECTS = 5,		// list objects in a container
+
+
+Representation of IDs
+`````````````````````
+Most comms interface requests and responses make use of object IDs.
+Since the IDs are variable length, the system needs a mechanism to determine how long the ID chain is.
+Give the IDs are stored in eeprom, it's essential the scheme is space-efficient.
+
+A container can have at most 127 contained objects (and may in fact have fewer).
+The MSB of each id in the chain is set to indicate there are more values to come, or cleared if this is the last number in the chain.
+
+For example
+    - ``5`` - since this is the last one, this is encoded simply as ``0x05``
+    - ``2.3`` - this is encoded as ``0x82 0x03``
+
+Some rejected approaches were to specify the length at the start, or use a special sentinel (e.g. -1) at the end to mark the end.
+Both of these take more space when the length of the ID chain is less than 8.
+
+Read Value Command
+``````````````````
+
+Command request::
+
+    01         read value command
+    repeat
+        id     zero or more variable-length IDs
+
+Command response::
+
+    01          read value command
+    repeat
+        id      variable length ID
+        size    length of the next datablock. Will be 0 for if id does not identify a valid readable value.
+        data[size]  the value
+
+Write Value Command
+```````````````````
+
+Command request::
+
+    02         write value command id
+    repeat
+        id     zero or more variable-length IDs
+        size   the size of the data to follow
+        data[size]  the value to write
+
+Command response::
+
+    02         write value command id
+    repeat
+        id     zero or more variable-length IDs
+        size   the size of the data to follow. Will be 0 if the object id is not known or is not writable.
+        data[size]  the value written
+
+The response lists the value of the object after writing the value. In most cases this will be the same
+as the value in the request. However, objects are free to veto a requested change.
+
+
+
+Create Object Command
+`````````````````````
+Creates a new object and places it in a specific container at an unused index.
+
+Command request::
+
+    0x03    create object command id
+    id      variable length id chain of the object to be created.
+    type    the type of object
+    ...     construction parameters of the object
+
+Note that unlike read/write value command, the command request may contain only one object creation.
+
+Command Response::
+
+    0x03    create object command id
+    id      id chain
+    type    the type of the object
+    ...     construction parameters
+    status  <0 on error, >=0 on success.
+
+
+todo - document the types of objects and the constructor arguments expected.
+
+
+Delete Object Command
+---------------------
+
+Deletes a previously created object.
+
+Notes:
+- when deleting a container, all contained objects MUST be deleted first. The system does not check.
+- only objects previously created with these commands (create object, create top-level object, place object) should be deleted. Attempts to delete
+    any other objects can crash the system. In particular, it is not possible to destroy the root container. It is immortal and cannot be destroyed.
+(Other than by pulling power to the arduino.)
+
+- attempting to delete an object that has already been deleted has no effect.
+
+Command request::
+
+    0x04    delete object command id
+    id      variable length id chain that specifies the id of the object to delete
+
+Command response::
+
+    0x04    delete object command id
+    id      variable length id chain that specifies the id of the object to delete
+    status  zero on success indicating the object was successfully deleted.
+            A non-zero value on error. (These values may later be defined error codes.)
+
+
+List Objects Command
+````````````````````
+Command request::
+
+    0x05    list objects command id
+
+Command response::
+    0x05    list objects command id
+    repeat
+        id  variable length id chain
+        len length of object params
+        block[len]  object params
+
+
+Persistence
+-----------
+As each object is created, the same command used to create it is stored in eeprom. This provides persistence of the
+object definitions and makes it posisble to reinstantiate all objects when the controller powers up by simply re-running
+all the object creation commands again from eeprom.
+
 
 
 Update Cycle
 ------------
-To preserve consistency values are refreshed/computed once per update cycle. Once a value has been first computed/updated
-during a given update cycle, subsequent requests to read the value during the same
-update cycle will return the same value.
+To maintain consistency values are refreshed/computed once per update cycle. Once a value has been first computed/updated
+during a given update cycle, subsequent requests to read/update the value during the same update cycle will return the same value.
+Values may also track if they have changed since the last update.
 
 As an implementation detail, this is done using flags to indicate if a value has already been computed for this update
 cycle. Alternative schemes using timeouts are too fragile to be used here, since
 they will then be tied to knowledge of how long the update cycle is. Delays in the update cycle will cause the value to
 be recomputed, providing an inconsistent set of results. Ensuring all values are stable for the duration of the update
 cycle is a key tenet to ensuring consistency and repeatability.
+
+Having a two-stage, reset/update cycle is beneficial to some devices that require some time to compute or sense their value.
+
+
+--------------------------------
+Refactor docs after this point.
+--------------------------------
+This is what remains from the original doc sketching out ideas.
+
+
+
+Listing the Devices
+-------------------
+The serial protocol will provide a command to list the construction of a device. This essentially replays the construction
+commands previously submitted.
+
+If a client knows the device ID it wants to retrieve construction details for, then it can go ahead and issue the command
+to list the device.
+
+Otherwise, clients can start by browsing the global container, with reserved ID '0'. This is the root in which all
+devices are contained.
+
+
+EEPROM Management
+-----------------
+
+The eeprom stores the create commands that are required in order to instantiate and configure various objects in the system.
+The commands are:
+
+- create (item id, variable args block)
+- set (item id) - configures an item/sets a value
+
+Deleted Items
+-------------
+When an item is deleted all it's configuration is removed from eeprom. In practice this is done by setting a flag against
+each configuration to indicate that it is deleted and can be ignored. At certain times, such as when there is little
+free space, the eeprom is compacted to remove the deleted items.
+
+
+Hardware Detection
+------------------
+A special container type can be instantiated by the client that detects installed hardware.
+
+For instance, instantiating a OneWireDetector container, configured with the onewire bus object. (At present, OneWire bus instances
+are hard-coded. These will now be regular configurable objects, and not have special treatment.)
+
+When devices are added or removed, the container sets a flag, which causes an event to be posted to serial. The arduino
+connector then requests the new list of detected devices, and determines connected/disconnected events based on the previous
+detected hardware.
+
+Detected and Installed Hardware
+-------------------------------
+
+
 
 
 Display
@@ -181,6 +440,8 @@ For the serial protocol, these composite IDs need to be encoded. Because the IDs
 needs to know how long they are. A simple scheme is to set the MSB to 1 if the ID has another byte following. So 0x1001
 would be encoded as 0x9001.  (An Alternative scheme would be to prefix each ID with the number of bytes, essentially making them
 array parameters - this is also workable.)
+8
+
 
 Serial Comms and Generic Function Call Mechanism
 ------------------------------------------------
@@ -199,8 +460,9 @@ Some examples of the functions supported:
  - read values - reads a number of values (each referenced via their ID) and returns each value. (the result includes status
     flags for invalid IDs and values that cannot be read.)
  - write values - write a number of values in one hit
- - reset values?? (I would prefer the default values being exposed so a  reset is simply writing the defaults.)
- - read default value - fetches the default value for a given value object.
+ - reset values?? (I would prefer the default values being exposed so a reset is simply writing the defaults.)
+ - read default value?? - fetches the default value for a given value object. I'm thinking defaults should be in the arduino connector (python)
+    to save space.
 
 The read values/write values replace much of the existing functionality
  - t - list SV/PV temperatures and state - read values from temp sensors (either the base hardware sensor, or the filtered sensor, both
@@ -221,6 +483,183 @@ The read values/write values replace much of the existing functionality
   -  U{} - define a device - replaced by the general Add object function.
 
 
+Safe-mode boot
+--------------
+On startup the system waits 2 seconds to recieve a command via serial that indicates a safe mode boot.
+In safe mode, none of the objects in eeprom are instantiated. This can help prevent problems and aid diagnostics.
+
+
+Commands
+========
+
+General format for serial protocol
+----------------------------------
+The serial protocol should be streamable, so that data can be read directly from the serial protocol. This means the data
+ is made up of fixed data, and variable data with either a proceeding byte count or a designated terminator value.
+
+Object identifiers
+------------------
+The top level container will most likely have many more. Other containers have a maximum of 7 objects.
+Want a compact representation that allows containers to have more objects but is efficient for the common case.
+
+first byte - 0-127 - object index.
+
+
+Create Object
+-------------
+Writes the data to eeprom - if that fails the command fails
+The data is written with the "ignore" bit set. This is a safeguard against crashes during construction of the object,
+ plus
+
+
+
+Read Value
+----------
+Not persisted
+01   - read (load) value identifier
+
+Write Value
+-----------
+Persisted? I guess it depends upon the specific value. When an object is created in eeprom, it may reserve space for
+subsequent updates. E.g. changing the co-efficient of a filter is persisted.
+
+Command syntax:
+05  - write (save) value identifier
+
+
+
+Destroying Objects
+------------------
+- The eeprom data is variable length (due to different parametesr for different objects)
+- has a "ignore" bit.
+- destroy disables all commands in eeprom (create/write) that reference the object
+- a compacting phase later removes the empty spaces.
+
+Compacting the eeprom
+- start from the beginning, read write pointers the same
+- work through, copying command chunks. There read pointer skips over disabled commands.
+- write 0xFF to the end
+
+
+
+Value Reference
+---------------
+A value reference is a proxy to some other value. It can be used to break cyclic dependencies, or for filling in
+the actual value dynamically later.
+
+
+
+Containers, Objects and Values, Oh My!
+--------------------------------------
+
+An object - some arbitrary identifiable item.
+A container - exposes an interface for retrieving known related items.
+A value - a type of object that represents a value. Has a associated log level so that information values are not logged normally.
+
+An asynchornous value - prepare/isReady/read. Prepare returns the minimum delay to wait before calling read.
+
+Example Hierarchy
+
+0 Root container (implicit)
+1 System info (static, readonly)
+1.0 - version string
+1.1 - shield type
+1.2 - embedded device type (leonardo/arduino/spark etc...)
+1.3 - etc...
+
+Basic temp sensor. Also a container
+0 - the temperature value
+
+Filtered temp sensor.
+0 - the filter (provides the filtered value)
+0.0 - filter value
+0.1 - filter coefficient
+1 - the temp sensor
+
+# Alternatively
+
+TempSensorWithFilter
+0 - the temp sensor (raw value)
+1..N - filters
+1.0 - the filtered value
+1.1 - the co-efficient
+
+PID Controller (v0)
+0 - state (heating/cooling waiting etc...)
+0.1 - state override (?) allow external control of controller state
+1 - beer temp sensor    (hard-coded indices here.)
+2 - fridge temp sensor
+3 - heat actuator
+4 - cool actuator
+5 - control parameters
+5.0 - mode
+5.1 - kp
+5.2 - ki
+5.3 - kd
+5.4 - beerSet
+5.5 - fridgeSet
+5.6 - tempRange (min.max)
+5.7 - idleRange
+5.8 - heatingTargetRange
+5.9 - coolingTargetRange
+5.10 - pidMax
+6 - runtime parameters
+6.0 - diff
+6.1 - p
+6.2 - i
+6.3 - d
+6.4 - peaks, estimates, beer slope, diff integral etc...
+
+
+
+
+
+- orgnaization depends upon if values are pulled or pushed.
+
+pull: request filtered temp -> filter requests basic temp, and updates to produce new filter temp
+push: new basic temp pushed into filters, cache flag set.
+maybe this is handled at the level of the container.
+
+how does the filter know to wait for reading from the temp sensor? Has to be handled in the main loop, that async devices are setup and waited for.
+ Need to enumerate async devices first.
+
+- can the filtered temp sensor be dynamic and allow additional filters? e.g. fast, slow and slope?
+- a slope value. it's output is the difference between successive values.
+
+
+In code, composition can make use of known types at compile time. Or the simple dynamic typing at runtime.
+
+
+
+read - given an object id, if the object is a value, returns the value. if the object is a container, fetches the object at location 0 and re-applies.
+This allows objects to later be changed to contaienrs to expose more values wihtout breaking compatibility with existing code.
+
+write - same for write
+
+create  - create an object and store in the specified container (default is top level container 0). Returns the id.
+        - takes a binary array as construction parameter
+
+enumerate object - walk the entire object hierarchy to enumerate each object
+the handler will do something, e.g. look for cached values and reset them
+
+Persistent Values
+-----------------
+
+In addition to object construction being stored in persistent storage, object configuration can also be persisted.
+
+Approaches:
+
+1. create a EepromPersistedValue that writes to byte-updatable eeprom. For efficient reads and less-frequent writes
+   the value may be fronted by a cache.
+
+2. for multiple configuration values, maintain them as a separate object that implements the container interface. Individual values can be set,
+ and the whole updated if there have been changes. This seems to imply the application lifecycle - init/prepare/read/cleanup for each discrete step.
+
+
+
+
+
+
 Templates/Recipes
 -----------------
 Rather than having to repeat commands to define many objects to build (say) a 2-stage temp controller over and over for each
@@ -229,3 +668,46 @@ These define input and outputs to the whole recipe and hide the internal objects
 This reuse may save eeprom space.
 
 It's not clear yet if these recipes should exist on the arduino or externally.
+
+
+Version
+-------
+The version number, shield type and other compiled in data was previously available as a separate command. For othogonality,
+the system will present the read-only system details as values in a special container.
+
+
+
+-------------
+Scenarios
+-------------
+
+Version
+-------
+
+Scenario: fetch the version number. The version number is compiled into the software at build time and is a 8-charcter long
+alphanumeric code.
+    Given a started arduino
+    Then serial read of value build number is an 8-character string
+
+
+
+
+Editable Variable and LCD display
+---------------------------------
+Scenario: configure a process value that can be read/written via serial and also via the LCD menu
+
+Feature: Process variable with display
+    Background:
+        Given a clean eeprom
+        And a defined persisted process variable P
+    Scenario: process value can be set and read via serial
+        When serial write value 42 to P
+        Then serial read of value P is 42
+    Scenario:
+        Given a display configured to display process variable P at the top left as tenths
+        The display shows 42.0 at the top left
+
+
+
+
+
