@@ -131,15 +131,21 @@ and to make it representable on a terminal. Furthermore, text strings can be lib
 A newline is used to terminate a block (a command). Not only does this help with readability, but also ensures that
 the system can recover from a dropped byte or synchronization problem from the start of the next command.
 
-Requests
-````````
-Requests are sent to the controller via the inbound comms interface stream. The format for the request is
+Requests and Responses
+``````````````````````
+Command Requests are sent to the controller via the inbound comms interface stream. The format for the request is
 
     request-id  1   hex-encoded byte              This is the identifier for the request
     request-data [variable length] hex-encoded bytes
     newline
 
-These requests are supported::
+Responses begin with sufficient information to allow the originating request to be identified. For simple commands
+that don't take any parameters, the identifying details are just the command id. For more complex commands, the response
+includes the command id plus the parameters to the command. After the originating request details, comes the
+result of the request.
+
+
+These commands are supported::
 
    	CMD_READ_VALUE = 1,			// read a value
    	CMD_WRITE_VALUE = 2,		// write a value
@@ -212,7 +218,7 @@ Creates a new object and places it in a specific container at an unused index.
 Command request::
 
     0x03    create object command id
-    id      variable length id chain of the object to be created.
+    id+     variable length id chain of the object to be created.
     type    the type of object
     ...     construction parameters of the object
 
@@ -221,10 +227,10 @@ Note that unlike read/write value command, the command request may contain only 
 Command Response::
 
     0x03    create object command id
-    id      id chain
+    id+     id chain specified in the request
     type    the type of the object
     ...     construction parameters
-    status  <0 on error, >=0 on success.
+    status  0 on success, non-zero on error,
 
 
 todo - document the types of objects and the constructor arguments expected.
@@ -246,18 +252,26 @@ Notes:
 Command request::
 
     0x04    delete object command id
-    id      variable length id chain that specifies the id of the object to delete
+    id+     variable length id chain that specifies the id of the object to delete
 
 Command response::
 
     0x04    delete object command id
-    id      variable length id chain that specifies the id of the object to delete
+    id+     variable length id chain that specifies the id of the object to delete
     status  zero on success indicating the object was successfully deleted.
             A non-zero value on error. (These values may later be defined error codes.)
 
 
 List Objects Command
 ````````````````````
+The list objects command lists all created objects in the system.
+
+TODO - it makes sense to parameterize this with an optional ID. The ID would be the ID of the object to list.
+ - if it's a simple object then it's construction is listed.
+ - if it's a container, then construction of that object is listed, and all contained objects (recursively.)
+ - if the ID is omitted, all objects in the root container are listed.
+
+
 Command request::
 
     0x05    list objects command id
@@ -265,16 +279,26 @@ Command request::
 Command response::
     0x05    list objects command id
     repeat
-        id  variable length id chain
-        len length of object params
-        block[len]  object params
+        0x03    create object command id
+        id+     variable length id chain
+        len     length of object params
+        [len]   object params
+
+(Note that the repeated part of the response is the same data passed to the Create Object command.)
+
 
 
 Persistence
 -----------
 As each object is created, the same command used to create it is stored in eeprom. This provides persistence of the
-object definitions and makes it posisble to reinstantiate all objects when the controller powers up by simply re-running
+object definitions and makes it possible to reinstantiate all objects when the controller powers up by simply re-running
 all the object creation commands again from eeprom.
+
+After an object has been created, but before it is used, the address it's creation details in eeprom are passed to it.
+This allows the eeprom to be used as storage by the object.
+
+Some objects expose persistent values, such as configuration settings. If these are stored as part of the object creation
+parameters, then individual components may chose to
 
 
 
@@ -293,10 +317,168 @@ cycle is a key tenet to ensuring consistency and repeatability.
 Having a two-stage, reset/update cycle is beneficial to some devices that require some time to compute or sense their value.
 
 
+----------------
+Example Sessions
+----------------
+
+A fresh clean state.
+
+List objects::
+
+    05
+
+Response:
+
+    05
+
+Create Null Object::
+    01 00
+
+
+
+
+-------------------------------
+Brewpi Object Definition Blocks
+-------------------------------
+
+OneWireBus
+----------
+
+ type:  0x01
+ len:   1
+ pin:   0-127
+
+Once constructed, the onewire bus exposes a read only streamed value.
+The data written to the stream is in this format:
+
+device address: [8-byte address]. First byte is non-zero family code.
+end-marker      0
+
+
+
+OneWireTempSensor
+-----------------
+
+ type: 0x02
+ len: 8 + 1 + id
+ address:   [8]         onewire address
+ calibration:  [1]      float4_4 calibration data
+ onewire bus id:    id  identifier of onewire bus object
+
+
+
+
+
+
+
+
+
+
+---------------------
+Designing New Objects
+---------------------
+
+Some guidelines:
+
+- if an object's property/value is immutable and specified in the creation arguments, it may not be necessary to make the
+  object a container and expose the property as a sub-value. Instead, clients can retrieve the original value by listing
+  the object definition.
+
+- objects can have a static factory method that creates a new instance from a ``ObjectDefinition`` struct.
+
+
 --------------------------------
 Refactor docs after this point.
 --------------------------------
-This is what remains from the original doc sketching out ideas.
+This is what remains from the original doc sketching out ideas, or are new ideas in progress.
+
+
+System Profiles
+---------------
+What we have been calling the root container so far, is in fact a Profile container, and all the objects configured
+in the root container are stored in a Profile.
+
+Multiple profiles can be managed, but at most one profile can be active at any time. On startup, the last active profile
+is loaded after 10 seconds. This gives external agents the chance to select a different profile, or request that no profile is loaded.
+
+The profile manager stores the last used profile in eeprom. This profile is automatically selected if no other profile is
+requested within 10 seconds after power on.
+
+The profile manager maintains the number of profiles in eeprom. A profile is defined by its start address.
+
+The beauty of profiles is that they can be switched at runtime, without requiring a power cycle.
+
+The last profile in eeprom is always open and can be added to. Closed profiles cannot have new objects added to them,
+although objects can be removed and object definitions changed in place.
+
+New profile commands?
+- since the root container is provided by the profile, this could always have an available object at the first index.
+- exposes a value for the current profile which can be set.
+
+Create profile/Delete profile
+- as new commands?
+- as create object?
+
+Profile Container, part of all root containers.
+- maximum of 4 profiles (for arduino.)
+- new object type for profile
+- create Profile object, target is profile container (0 in the root). result is new profile id (stored in the profile itself so it's persistent.)
+- value for current profile, setting this changes the profile.
+
+0 - profile container
+0.0 - active profile
+0.1 - profiles?
+0.2 -
+
+alternative
+
+0 - system profile
+0.0 - active profile
+0.1 - profiles
+0.1.0 - profile 0, a read-only Value that lists the creation statements for this profile.
+0.1.1 - profile 1,
+etc..
+
+
+
+
+
+
+
+Last used profile stored in eeprom. Outside of object system.
+
+Profile is create object statement in eeprom. Fixed size. includes location in eeprom where profile objects begin.
+
+
+
+
+
+Profile object
+- current profile exposed as a value (stored in eeprom to avoid runtime overhead.)
+-
+
+
+
+Logging
+-------
+At present logging is based on log IDs and parameters.
+Some logs should be considered events, e.g. temp sensor connection changes.
+
+Keep existing logging scheme but write out parameters in binary.
+Debug logs can be written out as annotations. These have the benefit of being completely ignored, rather than as before,
+breaking the protocol if they weren't inserted in the correct place, which can be difficult to code if the log
+is generated while producing serial output.
+
+Removing the need for string arguments avoids conversion. E.g. temp sensor disconnect used to have to convert the address,
+ now it can be written as data.
+
+
+
+
+
+
+
+
 
 
 
@@ -310,6 +492,9 @@ to list the device.
 
 Otherwise, clients can start by browsing the global container, with reserved ID '0'. This is the root in which all
 devices are contained.
+
+
+
 
 
 EEPROM Management
@@ -338,6 +523,22 @@ are hard-coded. These will now be regular configurable objects, and not have spe
 When devices are added or removed, the container sets a flag, which causes an event to be posted to serial. The arduino
 connector then requests the new list of detected devices, and determines connected/disconnected events based on the previous
 detected hardware.
+
+
+Logging and Arbitrary Hardware
+------------------------------
+One of the goals of the new controller design is that users can freely plugin sensors and have these monitored (after
+installing the hardware, i.e. issuing appropriate Create Object commands.)
+
+Sensors are logged by their object IDs, since the IDs are persisted and last for the duration of the object. (The corner-case
+ of one object replacing another has to be handled in the upper layers so that the database/service is aware that a potentially different
+ device is now producing the data.)
+
+
+
+
+
+
 
 Detected and Installed Hardware
 -------------------------------
@@ -485,46 +686,8 @@ The read values/write values replace much of the existing functionality
 
 Safe-mode boot
 --------------
-On startup the system waits 2 seconds to recieve a command via serial that indicates a safe mode boot.
+On startup the system waits 2 seconds to receive a command via serial that indicates a safe mode boot.
 In safe mode, none of the objects in eeprom are instantiated. This can help prevent problems and aid diagnostics.
-
-
-Commands
-========
-
-General format for serial protocol
-----------------------------------
-The serial protocol should be streamable, so that data can be read directly from the serial protocol. This means the data
- is made up of fixed data, and variable data with either a proceeding byte count or a designated terminator value.
-
-Object identifiers
-------------------
-The top level container will most likely have many more. Other containers have a maximum of 7 objects.
-Want a compact representation that allows containers to have more objects but is efficient for the common case.
-
-first byte - 0-127 - object index.
-
-
-Create Object
--------------
-Writes the data to eeprom - if that fails the command fails
-The data is written with the "ignore" bit set. This is a safeguard against crashes during construction of the object,
- plus
-
-
-
-Read Value
-----------
-Not persisted
-01   - read (load) value identifier
-
-Write Value
------------
-Persisted? I guess it depends upon the specific value. When an object is created in eeprom, it may reserve space for
-subsequent updates. E.g. changing the co-efficient of a filter is persisted.
-
-Command syntax:
-05  - write (save) value identifier
 
 
 
@@ -532,7 +695,6 @@ Destroying Objects
 ------------------
 - The eeprom data is variable length (due to different parametesr for different objects)
 - has a "ignore" bit.
-- destroy disables all commands in eeprom (create/write) that reference the object
 - a compacting phase later removes the empty spaces.
 
 Compacting the eeprom
@@ -540,14 +702,10 @@ Compacting the eeprom
 - work through, copying command chunks. There read pointer skips over disabled commands.
 - write 0xFF to the end
 
-
-
 Value Reference
 ---------------
 A value reference is a proxy to some other value. It can be used to break cyclic dependencies, or for filling in
 the actual value dynamically later.
-
-
 
 Containers, Objects and Values, Oh My!
 --------------------------------------
@@ -609,9 +767,6 @@ PID Controller (v0)
 6.2 - i
 6.3 - d
 6.4 - peaks, estimates, beer slope, diff integral etc...
-
-
-
 
 
 - orgnaization depends upon if values are pulled or pushed.
