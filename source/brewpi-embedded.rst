@@ -68,12 +68,17 @@ Containers
 A container is itself an object, and maintains logical grouping of (sub)objects. All objects in the controller exist in a container
 - it's not possible for an object to exist outside a container.
 
-Objects are stored in the container at a particular index, starting with 0. Objects can be added to the container and use
- a container-chosen index (the next one that is free) or the object can be assigned to a specific index in the container,
- replacing any object previously existing at that location.
+Objects are stored in the container at a particular index, starting with 0, up to some value N-1, where N is the
+size of the container. Note that a container of size N does not have to have N objects - some or all of the slots may
+have no object assigned to them.
+
+Containers may be open or closed. An open container allows new objects created in it or objects deleted from it. An open
+container supports the Fetch Next Slot command which finds the ID of an available slot in the container. Closed containers
+do not allow objects to be created or removed, only existing objects can be retrieved.
 
 Once an object is added to a container, it maintains the same index until that object is removed. Even if objects at lower
- indexes are removed, this has no bearing on the indexes of other objects in the container.
+indexes are removed, this has no bearing on the indexes of other objects in the container.
+
 
 The Root Container
 ------------------
@@ -89,7 +94,7 @@ Object IDs
 ----------
 The objects created in the controller exist in the memory space of the controller.
 To allow external access to these objects via the Comms interface, each object needs an ID. Since most object definitions
- are persistent (surviving power cycles) the ID of an object should also survive power-cycles.
+are persistent (surviving power cycles) the ID of an object should also survive power-cycles.
 
 The ID scheme used is based on the container hierarchy. The ID of an object is the object's index in it's host container,
 appended after the host container's ID. The root container is always implicit, and is not included in the ID.
@@ -98,7 +103,8 @@ For example
     - ``5``: a top-level object stored at index 5 (in the root container)
     - ``2.3`` : an object stored at index 3 in a container at index '2' in the root.
 
-Hence, each object in the system has an ID. In cases where the containers are reconstructed from eeprom
+Hence, each object in the system has an ID, and these IDs are persistent - the same objects will be available using the
+same ID after power-cycle. The object exists until it is explicitly deleted (see Delete Object command.)
 
 Values
 ------
@@ -111,8 +117,8 @@ Values may be readable/writable or both. Values are abstracted to provide indepe
 and how the system reacts when that value is assigned.  Values are readable,
 and optionally writable.
 
-All items of interest in the controller that can be logged or manipulated are represented as values.
-
+All items of interest in the controller that can be logged or manipulated are represented as values, and all values
+are optionally logged on each cycle.
 
 
 Comms Interface Format
@@ -152,7 +158,9 @@ These commands are supported::
    	CMD_CREATE_OBJECT = 3,		// add object in a container
    	CMD_DELETE_OBJECT = 4,		// delete the object at the specified location
    	CMD_LIST_OBJECTS = 5,		// list objects in a container
-    CMD_FREE_SLOT = 6           // retrieves the next free slot in a container
+    CMD_FREE_SLOT = 6,          // retrieves the next free slot in a container
+    CMD_CREATE_PROFILE = 7,     // create a new profile
+    CMD_DELETE_PROFILE = 8      // delete a profile
 
 Representation of IDs
 `````````````````````
@@ -169,6 +177,8 @@ For example
 
 Some rejected approaches were to specify the length at the start, or use a special sentinel (e.g. -1) at the end to mark the end.
 Both of these take more space when the length of the ID chain is less than 8.
+
+
 
 Read Value Command
 ``````````````````
@@ -225,7 +235,6 @@ Command request::
 Note that unlike read/write value command, the command request may contain only one object creation.
 
 
-
 Command Response::
 
     0x03    create object command id
@@ -234,8 +243,7 @@ Command Response::
     ...     construction parameters
     status  0 on success, non-zero on error,
 
-
-todo - document the types of objects and the constructor arguments expected.
+The types of objects that can be created and the format of their definition blocks is defined in "Brewpi Object Definition Blocks".
 
 
 Delete Object Command
@@ -245,10 +253,9 @@ Deletes a previously created object.
 
 Notes:
 - when deleting a container, all contained objects MUST be deleted first. The system does not check.
-- only objects previously created with these commands (create object, create top-level object, place object) should be deleted. Attempts to delete
-    any other objects can crash the system. In particular, it is not possible to destroy the root container. It is immortal and cannot be destroyed.
-(Other than by pulling power to the arduino.)
-
+- only objects previously created with these commands (create object, create top-level object, place object)
+  should be deleted. Attempts to delete any other objects can crash the system. In particular, it is not possible
+  to destroy the root container. It is immortal and cannot be destroyed. (Other than by pulling power to the arduino.)
 - attempting to delete an object that has already been deleted has no effect.
 
 Command request::
@@ -260,8 +267,8 @@ Command response::
 
     0x04    delete object command id
     id+     variable length id chain that specifies the id of the object to delete
-    status  zero on success indicating the object was successfully deleted.
-            A non-zero value on error. (These values may later be defined error codes.)
+    status  zero or greater on success indicating the object was successfully deleted.
+            A negative value on error. (These values may later be defined error codes.)
 
 
 List Objects Command
@@ -302,6 +309,37 @@ Command response::
    0x06
    id+      the container id
    slot     >=0 if a free slot is available. <0 if not available, or object identified by id isn't an open container.
+
+
+Create Profile
+``````````````
+Creates a new profile and activates it. All other profiles are closed, meaning they cannot be added to.
+
+Command request::
+
+    0x06    create profile command id
+
+Command Response::
+
+    0x06    create profile command id
+    profile the id of the profile created >=0. negative on error.
+
+
+Delete Profile
+``````````````
+Deletes a profile and all objects defined in that profile.
+If the profile is the active profile, it is unloaded.
+
+Command request::
+
+    0x07    delete profile command id
+    id      profile id to delete
+
+Command Response::
+
+    0x07    delete profile command id
+    status  >=0 if the profile was deleted. <0 on error.
+
 
 
 Persistence
