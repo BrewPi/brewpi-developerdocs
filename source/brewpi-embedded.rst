@@ -152,7 +152,7 @@ These commands are supported::
    	CMD_CREATE_OBJECT = 3,		// add object in a container
    	CMD_DELETE_OBJECT = 4,		// delete the object at the specified location
    	CMD_LIST_OBJECTS = 5,		// list objects in a container
-
+    CMD_FREE_SLOT = 6           // retrieves the next free slot in a container
 
 Representation of IDs
 `````````````````````
@@ -224,6 +224,8 @@ Command request::
 
 Note that unlike read/write value command, the command request may contain only one object creation.
 
+
+
 Command Response::
 
     0x03    create object command id
@@ -286,6 +288,20 @@ Command response::
 
 (Note that the repeated part of the response is the same data passed to the Create Object command.)
 
+Free Slot Command
+`````````````````
+Retrieves the next available slot in a container.
+
+Command request::
+
+    0x06    next free slot command id
+    id+     id of container
+
+Command response::
+
+   0x06
+   id+      the container id
+   slot     >=0 if a free slot is available. <0 if not available, or object identified by id isn't an open container.
 
 
 Persistence
@@ -331,8 +347,13 @@ Response:
 
     05
 
+There are no objects to list, so just the response command id is returned.
+
+
 Create Null Object::
-    01 00
+    01 00 00
+
+
 
 
 
@@ -425,21 +446,44 @@ Profile Container, part of all root containers.
 - create Profile object, target is profile container (0 in the root). result is new profile id (stored in the profile itself so it's persistent.)
 - value for current profile, setting this changes the profile.
 
-0 - profile container
+0 - root container
 0.0 - active profile
 0.1 - profiles?
 0.2 -
 
 alternative
 
-0 - system profile
+0 - root container
 0.0 - active profile
 0.1 - profiles
 0.1.0 - profile 0, a read-only Value that lists the creation statements for this profile.
 0.1.1 - profile 1,
 etc..
 
+profile as new object. container is at position 0 in the root.
 
+create object will fail if there is already a profile active at that location.
+
+- create object command
+03 10 80 00 00
+
+03 - create object command
+10 - profile object type id
+80 00 - place in container 00 (80, because not last in chain) at index 00.
+
+
+
+
+blank system
+startup: doesn't find magic number in eeprom so erases eeprom
+creates profile 0 and sets this as active
+serial comms ready to receive object creation commands
+
+later
+client issues either delete profile or create profile command
+create profile command closes current profile and creates a new profile
+
+delete profile erases the profile
 
 
 
@@ -462,11 +506,11 @@ Profile object
 Logging
 -------
 At present logging is based on log IDs and parameters.
-Some logs should be considered events, e.g. temp sensor connection changes.
+Some logs should be considered events, e.g. temp sensor connection changes. (Maybe all logs are events - logs and events being the same thing - an event ID with parameters.)
 
 Keep existing logging scheme but write out parameters in binary.
 Debug logs can be written out as annotations. These have the benefit of being completely ignored, rather than as before,
-breaking the protocol if they weren't inserted in the correct place, which can be difficult to code if the log
+breaking the protocol if they weren't inserted in the correct place, which can be difficult to code when the log
 is generated while producing serial output.
 
 Removing the need for string arguments avoids conversion. E.g. temp sensor disconnect used to have to convert the address,
