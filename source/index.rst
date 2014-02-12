@@ -15,7 +15,6 @@ The documentation can also include Doxygen output from the C++ code via :ref:`br
 
     brewpi-v1-spec
     brewpi-embedded
-    brewpi-bot
     new-classes-draft
     doxygentest
     plantuml
