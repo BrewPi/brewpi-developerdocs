@@ -224,7 +224,8 @@ Command Response::
     id      id chain
     type    the type of the object
     ...     construction parameters
-    status  <0 on error, >=0 on success.
+    status  zero on success indicating the object was successfully deleted.
+            A non-zero value on error. (These values may later be defined error codes.)
 
 
 todo - document the types of objects and the constructor arguments expected.
