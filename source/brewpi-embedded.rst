@@ -168,7 +168,8 @@ These commands are supported::
    	CMD_LIST_OBJECTS = 5,		// list objects in a container
     CMD_FREE_SLOT = 6,          // retrieves the next free slot in a container
     CMD_CREATE_PROFILE = 7,     // create a new profile
-    CMD_DELETE_PROFILE = 8      // delete a profile
+    CMD_DELETE_PROFILE = 8,     // delete a profile
+    CMD_ACtIVTE_PROFILE = 9     // activate a profile
 
 Representation of IDs
 ^^^^^^^^^^^^^^^^^^^^^
@@ -332,32 +333,53 @@ Command response::
 
 Create Profile
 ``````````````
-Creates a new profile and activates it. All other profiles are closed, meaning they cannot be added to.
+Creates a new profile.  All other profiles are closed, meaning they cannot be added to.
+The newly created profile is not activated.
 
 Command request::
 
-    0x06    create profile command id
+    0x07    create profile command id
 
 Command Response::
 
-    0x06    create profile command id
+    0x07    create profile command id
     profile the id of the profile created >=0. negative on error.
 
 
 Delete Profile
 ``````````````
 Deletes a profile and all objects defined in that profile.
-If the profile is the active profile, it is unloaded.
+If the profile is the active profile, it is deactivated first.
 
 Command request::
 
-    0x07    delete profile command id
+    0x08    delete profile command id
     id      profile id to delete
 
 Command Response::
 
-    0x07    delete profile command id
+    0x08    delete profile command id
     status  >=0 if the profile was deleted. <0 on error.
+
+
+Activate Profile
+````````````````
+Activates a profile. The current active profile is deactivated.
+This is a no-op if the specified profile is already active.
+
+Command request::
+
+    0x09    activate profile command id
+    id      the id of the profile to activate. This can be the value -1 (0xFF) to activate nothing.
+
+Command Response::
+
+    0x09    create profile command id
+    id      the id of the profile requested to activate
+    status  >=0 on success, <0 on error.
+
+The activation is persistent, so the profile will remain active even after reboot until either activateProfile or
+deleteProfile command is invoked.
 
 
 
