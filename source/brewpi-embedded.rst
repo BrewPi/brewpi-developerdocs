@@ -114,6 +114,7 @@ For example
 Hence, each object in the system has an ID, and these IDs are persistent - the same objects will be available using the
 same ID after power-cycle. The object exists until it is explicitly deleted (see Delete Object command.)
 
+
 Values
 ------
 Values are a central concept in a controller.
@@ -128,6 +129,40 @@ Values are readable and optionally writable.
 
 All items of interest in the controller that can be logged or manipulated are represented as values, and all values
 are optionally logged on each cycle.
+
+
+System Profile
+--------------
+The system allows multiple configurations to be stored in eeprom. Each configuration corresponds logically to a distinct
+root container.
+
+The first time the system boots (or if it doesn't recognise the data in eeprom) the system initializes with one
+system profile that is active. (Profile id 0.)
+The system is ready to receive create object commands to build the object hierarchy.
+
+The id of the currently active profile is made available as a Active Profile Value object at index 0 of the root
+container.
+The value can be read to find the id of currently active profile (or <0 for no active profile).
+The value can be written to activate a different profile (id>=0) or activate no profile (id<0).
+
+The last activated profile is persisted, so that on reboot the same profile is activated.
+
+The create profile command is used to create a new profile. The profile is not activated until the
+When a new profile is created, any currently active profile (the root container) is then marked as closed.
+This means additional objects cannot be created in this profile.  (This limitation may be lifted later if there is
+reason.)
+
+
+
+Safe Mode Boot
+``````````````
+On startup the system waits X [TODO] seconds before loading the last activated profile.
+The external code can stop this from happening by sending a activate profile command, specifying profile id -1.
+This prevents the profile from being loaded.
+
+
+
+
 
 Comms Interface Format
 ----------------------
@@ -153,10 +188,11 @@ Command Requests are sent to the controller via the inbound comms interface stre
     request-data [variable length] hex-encoded bytes
     newline
 
-Responses begin with sufficient information to allow the originating request to be identified. For simple commands
-that don't take any parameters, the identifying details are just the command id. For more complex commands, the response
-includes the command id plus the parameters to the command. After the originating request details, comes the
-result of the request.
+Responses always echo the original request data - this provides enough information to allow the originating request
+to be identified by the caller.
+For simple commands that don't take any parameters, the identifying details are just the command id.
+For more complex commands, the response includes the command id plus the parameters to the command.
+After the originating request details comes the result of the request.
 
 
 These commands are supported::
@@ -169,7 +205,9 @@ These commands are supported::
     CMD_FREE_SLOT = 6,          // retrieves the next free slot in a container
     CMD_CREATE_PROFILE = 7,     // create a new profile
     CMD_DELETE_PROFILE = 8,     // delete a profile
-    CMD_ACtIVTE_PROFILE = 9     // activate a profile
+    CMD_COMPACT_PROFILE = 9,    // compact storage in eeprom for the current profile
+    CMD_LOG_VALUES = 0x0A,      // log values from the selected container
+
 
 Representation of IDs
 ^^^^^^^^^^^^^^^^^^^^^
@@ -197,17 +235,17 @@ A read command can request multiple values at once. The last id is followed by n
 
 Command request::
 
-    01         read value command
-    repeat
-        id     zero or more variable-length IDs
+    01          read value command
+    id          variable-length ID to read
 
 Command response::
 
     01          read value command
-    repeat
-        id      variable length ID
-        size    length of the next datablock. Will be 0 for if id does not identify a valid readable value.
-        data[size]  the value
+    id          variable length ID
+    size        length of the next datablock. Will be 0 for if id does not identify a valid readable value.
+    data[size]  the value
+
+NB: at present only a single value can be read with this command. So there should be no repeats.
 
 Write Value Command
 ^^^^^^^^^^^^^^^^^^^
@@ -215,19 +253,21 @@ A write command can write multiple values at once. The last value is followed by
 
 Command request::
 
-    02         write value command id
-    repeat
-        id     zero or more variable-length IDs
-        size   the size of the data to follow
-        data[size]  the value to write
+    02          write value command id
+    id          object to write to
+    size        the size of the data to follow
+    data[size]  the value to write
 
 Command response::
 
-    02         write value command id
-    repeat
-        id     zero or more variable-length IDs
-        size   the size of the data to follow. Will be 0 if the object id is not known or is not writable.
-        data[size]  the value written
+    02          write value command id
+    id          object requested to write to
+    size        requeted size of data to write
+    data[size]  requested data to write
+    size        actual data size
+    data[size]  actual data
+
+
 
 The response lists the value of the object after writing the value.
 In most cases this will be the same as the value in the request.
@@ -240,22 +280,24 @@ Creates a new object and places it in a specific container at an unused index.
 
 Command request::
 
-    0x03    create object command id
-    id+     variable length id chain of the object to be created.
-    type    the type of object
-    ...     construction parameters of the object
+    0x03        create object command id
+    id+         variable length id chain of the object to be created.
+    type        the type of object
+    size        size of construction parameters of the object
+    data[size]  construction data
 
 Note that unlike read/write value command, the command request may contain only one object creation.
 
 
 Command Response::
 
-    0x03    create object command id
-    id+     id chain specified in the request
-    type    the type of the object
-    ...     construction parameters
-    status  zero on success indicating the object was successfully deleted.
-            A non-zero value on error. (These values may later be defined error codes.)
+    0x03        create object command id
+    id+         id chain specified in the request
+    type        the type of the object
+    size        size of construction parameters of the object
+    data[size]  construction data
+    status      zero or positive on success indicating the object was successfully deleted.
+                A negative value on error. (These values may later be defined error codes.)
 
 The types of objects that can be created and the format of their definition blocks is defined in "Brewpi Object Definition Blocks".
 
@@ -362,38 +404,55 @@ Command Response::
     status  >=0 if the profile was deleted. <0 on error.
 
 
-Activate Profile
-````````````````
-Activates a profile. The current active profile is deactivated.
-This is a no-op if the specified profile is already active.
+Compact Storage
+```````````````
+Removes deleted object definitions in persistent storage for the current profile.
+If the current profile is not open, this command has no affect.
 
-Command request::
+The system automatically runs this command when the currently open profile is closed.
 
-    0x09    activate profile command id
-    id      the id of the profile to activate. This can be the value -1 (0xFF) to activate nothing.
+
+Command Request::
+
+    0x09    compact storage command id
 
 Command Response::
 
-    0x09    create profile command id
-    id      the id of the profile requested to activate
+    0x09    compact storage command id
     status  >=0 on success, <0 on error.
 
-The activation is persistent, so the profile will remain active even after reboot until either activateProfile or
-deleteProfile command is invoked.
 
+Log Values Command
+``````````````````
+Writes out the values for all objects in a container.
 
+Command Request::
+
+    0x0A    log values command id
+    flags   0 to log all values, 1 to restrict values to the following id
+    [id*]   optional id chain to restrict
+
+Command Response::
+
+    0x0A    log values command id
+    flags   from request
+    [id*]   optional id from reqquest
+    repeat
+        id      variable length ID
+        size    length of the next datablock. Will be 0 for if id does not identify a valid readable value.
+        data[size]  the value
+
+The response data is the same as the read values command.
 
 Persistence
 -----------
 As each object is created, the same command used to create it is stored in eeprom.
-object definitions and makes it possible to reinstantiate all objects when the controller powers up by simply re-running
-controller powers up by simply re-running all the object creation commands again from eeprom.
+This makes it possible to reinstantiate all objects when the controller powers up by simply re-running
+all the object creation commands again from eeprom.
 
 After an object has been created, but before it is used, the address it's creation details in eeprom are passed to it.
-This allows the eeprom to be used as storage by the object.
-
-Some objects expose persistent values, such as configuration settings. If these are stored as part of the object creation
-parameters, then individual components may chose to
+This allows the eeprom definition block to be used as storage by the object. The first byte of the definition block
+lists the length.
 
 
 Update Cycle
@@ -806,19 +865,6 @@ The read values/write values replace much of the existing functionality
   *  U{} - define a device - replaced by the general Add object function.
 
 
-Safe-mode boot
---------------
-On startup the system waits 2 seconds to receive a command via serial that indicates a safe mode boot.
-In safe mode, none of the objects in eeprom are instantiated.
-This can help prevent problems and aid diagnostics.
-
-
-The serial protocol should be streamable, so that data can be read directly from the serial protocol.
-This means the data is made up of fixed data, and variable data with either a proceeding byte count or a designated
-terminator value.
-The top level container will most likely have many more.
-Other containers have a maximum of 7 objects.
-plus
 
 Destroying Objects
 ------------------
