@@ -205,8 +205,12 @@ These commands are supported::
     CMD_FREE_SLOT = 6,          // retrieves the next free slot in a container
     CMD_CREATE_PROFILE = 7,     // create a new profile
     CMD_DELETE_PROFILE = 8,     // delete a profile
-    CMD_COMPACT_PROFILE = 9,    // compact storage in eeprom for the current profile
-    CMD_LOG_VALUES = 0x0A,      // log values from the selected container
+    CMD_ACTIVATE_PROFILE = 9,    // compact storage in eeprom for the current profile
+    CMD_LOG_VALUES = 10,        // log values from the selected container
+    CMD_RESET = 11,             // reset the device
+    CMD_FREE_SLOT_ROOT = 12,    // find the next free slot in the root container
+
+    CMD_LIST_PROFILES = 14,     // list the define profile IDs
 
 
 Representation of IDs
@@ -237,6 +241,7 @@ Command request::
 
     01          read value command
     id          variable-length ID to read
+    size        size of data block expected
 
 Command response::
 
@@ -331,24 +336,19 @@ Command response::
             A negative value on error. (These values may later be defined error codes.)
 
 
-List Objects Command
+List Profile Command
 ^^^^^^^^^^^^^^^^^^^^
 
 The list objects command lists all created objects in the system.
 
-TODO - it makes sense to parameterize this with an optional ID. The ID would be the ID of the object to list.
- - if it's a simple object then it's construction is listed.
- - if it's a container, then construction of that object is listed, and all contained objects (recursively.)
- - if the ID is omitted, all objects in the root container are listed.
-
-
 Command request::
 
-    0x05    list objects command id
+    0x05        list profile command id
+    profile_id  the profile to list
 
 Command response::
 
-    0x05    list objects command id
+    0x05    list profile command id
     repeat
         0x03    create object command id
         id+     variable length id chain
@@ -391,7 +391,9 @@ Command Response::
 Delete Profile
 ``````````````
 Deletes a profile and all objects defined in that profile.
-If the profile is the active profile, it is deactivated first.
+If the profile is the active profile, it is deactivated first, so that any instantiated objects are
+cleaned up.
+
 
 Command request::
 
@@ -401,25 +403,28 @@ Command request::
 Command Response::
 
     0x08    delete profile command id
+    id      profile id to delete
     status  >=0 if the profile was deleted. <0 on error.
 
 
-Compact Storage
-```````````````
-Removes deleted object definitions in persistent storage for the current profile.
-If the current profile is not open, this command has no affect.
-
-The system automatically runs this command when the currently open profile is closed.
-
+Activate Profile Command
+^^^^^^^^^^^^^^^^^^^^^^^^
+Unloads the current profile and optionally activates a profile.
 
 Command Request::
 
-    0x09    compact storage command id
+    0x09    activate profile command
+    id      profile id to activate, or -1 to not activate any profile
 
-Command Response::
+Command response::
 
-    0x09    compact storage command id
-    status  >=0 on success, <0 on error.
+    0x09    activate profile command
+    id      profile id to activate, or -1 to not activate any profile
+    status  >=0 on success <0 on error
+
+If the current profile is the most recently one created, objects in the profile are compacted.
+Thus, to force the system to compact a profile, deactivate the profile (send command activate profile -1) then active
+the profile again. This should be done after deleting many objects to free up the persistent storage.
 
 
 Log Values Command
@@ -443,6 +448,46 @@ Command Response::
         data[size]  the value
 
 The response data is the same as the read values command.
+
+Reset
+^^^^^
+Forces the device to reset.
+
+Command request::
+
+    0x0B    reset command
+
+(no response - the device is reset)
+
+
+Free Slot Root Command
+^^^^^^^^^^^^^^^^^^^^^^
+Retrieves the next available slot in the root container.
+
+Command request::
+
+    0x0C    next free slot command id
+
+Command response::
+
+   0x0C
+   slot     >=0 if a free slot is available. <0 if not available.
+
+
+List Profiles
+-------------
+Lists the activate profile id, and the profile ids that are defined.
+
+Command Request::
+
+    0x0E    list profiles command
+
+Command Response::
+
+    0x0E    list profiles command
+    activate    The active profile id
+    [id]        a list of profile ids that are defined
+
 
 Persistence
 -----------
@@ -1005,6 +1050,9 @@ Version
 -------
 The version number, shield type and other compiled in data was previously available as a separate command.
 For othogonality, the system will present the read-only system details as values in a special container.
+
+todo - now that we have profiles, we need another command so we can have a system container hierarchy. This hierarchy
+doesn't change with profiles - it's external to the profile.
 
 
 
