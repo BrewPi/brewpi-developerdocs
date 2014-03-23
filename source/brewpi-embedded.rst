@@ -153,15 +153,35 @@ This means additional objects cannot be created in this profile.  (This limitati
 reason.)
 
 
-
 Safe Mode Boot
 ``````````````
 On startup the system waits X [TODO] seconds before loading the last activated profile.
 The external code can stop this from happening by sending a activate profile command, specifying profile id -1.
 This prevents the profile from being loaded.
 
+System Objects
+^^^^^^^^^^^^^^
+Regular user-space objects are stored with a profile and created/removed by the user. In contrast, system objects
+are not bound to any profile but to the controller itself. These system objects are created by the controller.
+Most are typically read only with only a few being writable in some cases.
 
+Like user objects, system objects are
 
+The commands associated with system objects are:
+
+ - read system object
+ - write system object
+ - list system objects ?? (Not sure if this is needed.)
+
+These commands operate similarly to their corresponding user object commands, but they use the system
+object container as their starting point.
+
+The system objects are provided as part of the application. For brewpi, we have these system objects defined
+in the system object space:
+
+ - 0: device id. Some devices have an intrinsic ID while others do not. Also, the number of bytes in the ID may vary.
+    Concretely, for an arduino, it is assumed to be always used with the localhost, so the id is a single byte.
+    For a spark core, the internal ID is retrieved.
 
 
 Comms Interface Format
@@ -209,8 +229,11 @@ These commands are supported::
     CMD_LOG_VALUES = 10,        // log values from the selected container
     CMD_RESET = 11,             // reset the device
     CMD_FREE_SLOT_ROOT = 12,    // find the next free slot in the root container
-
+    CMD_UNUSED = 13,            // unused
     CMD_LIST_PROFILES = 14,     // list the define profile IDs
+    CMD_READ_SYSTEM_VALUE = 15, // read the value of a system object
+    CMD_SET_SYSTEM_VALUE = 16,  // write the value of a system object
+    CMD_SET_MASK_VALUE = 17,    // write the value of a user object with a mask to preserve some of the original data
 
 
 Representation of IDs
@@ -241,16 +264,17 @@ Command request::
 
     01          read value command
     id          variable-length ID to read
-    size        size of data block expected
+    size        size of result data block expected - can be 0 if size is not known.
 
 Command response::
 
     01          read value command
     id          variable length ID
-    size        length of the next datablock. Will be 0 for if id does not identify a valid readable value.
+    expectedsize        the size of the data block expected
+    actualsize          length of the next data block. Will be 0 for if id does not identify a valid readable value, or
+        the expected size was non-zero and not equal to the actual data block size.
     data[size]  the value
 
-NB: at present only a single value can be read with this command. So there should be no repeats.
 
 Write Value Command
 ^^^^^^^^^^^^^^^^^^^
@@ -267,7 +291,7 @@ Command response::
 
     02          write value command id
     id          object requested to write to
-    size        requeted size of data to write
+    size        requested size of data to write
     data[size]  requested data to write
     size        actual data size
     data[size]  actual data
@@ -456,9 +480,14 @@ Forces the device to reset.
 Command request::
 
     0x0B    reset command
+    flags   if 0, the eeprom is left untouched. if 1, the eeprom is erased prior to reset.
 
-(no response - the device is reset)
+Response::
+    0x0B    reset command
+    flags
+    0x00    confirmation of reset
 
+The eeprom is erased and the response returned before the device is reset.
 
 Free Slot Root Command
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -487,6 +516,85 @@ Command Response::
     0x0E    list profiles command
     activate    The active profile id
     [id]        a list of profile ids that are defined
+
+
+Read System Value
+-----------------
+Reads the value of a system object in the system root container. System objects are stored outside of the normal profile
+space. For example, the unique ID of a device is stored in the system root container. System objects are instantiated
+automatically by the system.
+
+Apart from the changed command ID, the syntax for this command is identical to the read value command (0x01).
+
+Command request::
+
+    0x0F        read system value command
+    id          variable-length ID to read
+    size        size of result data block expected - can be 0 if size is not known.
+
+Command response::
+
+    0x0F        read system value command
+    id          variable length ID
+    expectedsize        the size of the data block expected
+    actualsize          length of the next data block. Will be 0 for if id does not identify a valid readable value, or
+        the expected size was non-zero and not equal to the actual data block size.
+    data[size]  the value
+
+
+
+Write System Value
+------------------
+Writes the value of a system object. The syntax for this command is identical to the write value command, apart from a
+change in command ID.
+
+Write Value Command
+^^^^^^^^^^^^^^^^^^^
+A write command can write multiple values at once. The last value is followed by newline, like in all other commands.
+
+Command request::
+
+    0x10        write system value command id
+    id          object to write to
+    size        the size of the data to follow
+    data[size]  the value to write
+
+Command response::
+
+    0x10        write system value command id
+    id          object requested to write to
+    size        requested size of data to write
+    data[size]  requested data to write
+    size        actual data size
+    data[size]  actual data
+
+
+Write Masked Value
+------------------
+This command allows a partial update of an object's value by interleaving a mask along with the data bytes.
+When a bit is set in the max, then the corresponding bit in the data is also written to the object. When the mask
+has a 0 bit, then that bit is left alone (retains it's existing value, regardless of the value of the datastream.)
+
+The format is similar to the write command, but the data block is interpreted as an interleaving of data byts and
+mask bytes.
+
+Command request::
+
+    0x11        write masked value command id
+    id          object to write to
+    size        the number of data and mask byte pairs
+    data[size*2]  the value and mask to write. the byte at 2N is applied with mask 2N+1 and then written to the object's
+                byte at N, preserving existing data where the mask has a 0 bit.
+
+Command response::
+
+    0x11        write masked value command id
+    id          object to write to
+    size        the number of data and mask byte pairs
+    data[size*2]  the value and mask to write. the byte at 2N is applied with mask 2N+1 and then written to the object's
+    size        actual data size. Will be 0 if the id does not reference a writable value object.
+    data[size]  current value of the data written
+
 
 
 Persistence
@@ -1050,9 +1158,6 @@ Version
 -------
 The version number, shield type and other compiled in data was previously available as a separate command.
 For othogonality, the system will present the read-only system details as values in a special container.
-
-todo - now that we have profiles, we need another command so we can have a system container hierarchy. This hierarchy
-doesn't change with profiles - it's external to the profile.
 
 
 
