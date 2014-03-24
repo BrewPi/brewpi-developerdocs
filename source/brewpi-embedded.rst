@@ -305,7 +305,11 @@ However, objects are free to veto a requested change.
 
 Create Object Command
 ^^^^^^^^^^^^^^^^^^^^^
-Creates a new object and places it in a specific container at an unused index.
+Creates a new object and places it at a specific location, specified by the id chain. Note that the system does not
+automatically delete any object that is at that slot, and so the caller should ensure the slot is empty or the system
+will have a memory leak - the old object will be still in memory, but no longer reclaimable since it's pointer has been
+overwritten. Slots returned by the "next free slot" command are guaranteed empty, so this is only a concern when
+deliberately overwriting an existing slot.
 
 Command request::
 
@@ -621,7 +625,7 @@ long the update cycle is.
 Delays in the update cycle will cause the value to be recomputed, providing an inconsistent set of results.
 Ensuring all values are stable for the duration of the update cycle is a key tenet to ensuring consistency and repeatability.
 
-Having a two-stage, reset/update cycle is beneficial to some devices that require some time to compute or sense their value.
+Having a two-stage, prepare/update cycle is beneficial to some devices that require some time to compute or sense their value.
 
 Example Sessions
 ----------------
@@ -638,9 +642,6 @@ Response:
 
 There are no objects to list, so just the response command id is returned.
 
-
-Create Null Object::
-    01 00 00
 
 Brewpi Object Definition Blocks
 -------------------------------
@@ -669,6 +670,60 @@ OneWireTempSensor
  onewire bus id:    id  identifier of onewire bus object
 
 
+Current Ticks
+^^^^^^^^^^^^^
+(NB: this is mainly for testing and may later be removed.)
+A readable value that provides a 2-byte (big-endian) value that is the number of milliseconds elapsed since the controller
+started.
+
+    type: 0x03
+    len: 0
+
+
+Dynamic Container
+^^^^^^^^^^^^^^^^^
+A container that dynamically resizes as elements are added.
+
+    type: 0x04
+    len: 0
+
+Persisted Value
+^^^^^^^^^^^^^^^
+A value that is made persistent.
+
+    type: 0x05
+    len: <variable>
+
+The initial data provides during construction provides the size of the datablock (which cannot be changed) and
+the initial value for the data. Reads and writes to this value must always be the same size.
+
+ Profile
+ ^^^^^^^
+ A profile computes a value based on a number of (time,value) points. The value is interpolated from the two nearest
+ time points. A profile can contain a maximum of 16 data points.
+
+    type: 0x06
+    len: (N+1) * 4 + id_chain
+    format:
+        4-bytes of 0x00
+        for each of N time,value points (0..N-1):
+            uint16_t time (in minutes)
+            uint16_t value (arbitrary)
+        id_chain where profile result should be stored
+
+When reading/writing the profile, the format is the same as above, but now the first 4 bytes are defined:
+        byte 0: SSSSIIXR
+            SSSS    - 4-bits encoding the current profile step (0-15)
+            II      - 2 bits encoding the interpolation type (00=none, 01=linear, 10=smooth, 11, smoother.)
+            X       - reserved (set to 0)
+            R       - running
+
+        bytes 1-2:  - current time duration into current step (in minutes)
+
+By using a write-mask command, parts of the block can be selectively updated. In particular,
+the step should not be changed, so the mask 0x0F should be used for the first byte.
+
+
 Designing New Objects
 ---------------------
 
@@ -678,7 +733,6 @@ Some guidelines:
   object a container and expose the property as a sub-value. Instead, clients can retrieve the original value by listing
   the object definition.
 
-- objects can have a static factory method that creates a new instance from a ``ObjectDefinition`` struct.
 
 Refactor docs after this point.
 ===============================
