@@ -697,10 +697,10 @@ A value that is made persistent.
 The initial data provides during construction provides the size of the datablock (which cannot be changed) and
 the initial value for the data. Reads and writes to this value must always be the same size.
 
- Profile
- ^^^^^^^
- A profile computes a value based on a number of (time,value) points. The value is interpolated from the two nearest
- time points. A profile can contain a maximum of 16 data points.
+Profile
+^^^^^^^
+A profile computes a value based on a number of (time,value) points. The value is interpolated from the two nearest
+time points. A profile can contain a maximum of 16 data points.
 
     type: 0x06
     len: (N+1) * 4 + id_chain
@@ -722,6 +722,19 @@ When reading/writing the profile, the format is the same as above, but now the f
 
 By using a write-mask command, parts of the block can be selectively updated. In particular,
 the step should not be changed, so the mask 0x0F should be used for the first byte.
+
+
+PersistChangeValue
+^^^^^^^^^^^^^^^^^^
+This is a 2-byte value that is stored in memory, and persisted to eeprom when the difference between the current
+value and the last value stored is greater than a threshold.
+
+    type: 0x09
+    bytes 0-1: 16-bit value (big-endian) This is the initial value.
+    bytes 2-3: 16 bit threshold (bit-endian) for saving changes
+
+Reading and writing are done on a 2-byte big endian value which sets the current value. If the current value
+is more than the threshold difference from the last persisted value,
 
 
 Designing New Objects
