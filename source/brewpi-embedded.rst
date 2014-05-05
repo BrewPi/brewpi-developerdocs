@@ -485,6 +485,7 @@ Command request::
 
     0x0B    reset command
     flags   if 0, the eeprom is left untouched. if 1, the eeprom is erased prior to reset.
+            add 2 to perform a hard-reset after the command has executed.
 
 Response::
     0x0B    reset command
@@ -643,22 +644,30 @@ Response:
 There are no objects to list, so just the response command id is returned.
 
 
-Brewpi Object Definition Blocks
--------------------------------
+Brewpi Object Definition Blocks and Read/Write Format
+-----------------------------------------------------
 
 OneWireBus
 ^^^^^^^^^^
+Provides runtime resources needed to communicate over a one-wire bus connected
+to a pin on the Arduino.
 
- type:  0x01
- len:   1
- pin:   0-127
+Definition
+``````````
+    type:      0x01
+    len:       1
+    byte 0:    pin nr of onewire bus
 
-Once constructed, the onewire bus exposes a read only streamed value.
-The data written to the stream is in this format:
 
-device address: [8-byte address]. First byte is non-zero family code.
-end-marker      0
+Read
+````
+The onewire bus exposes a read only value that is an encoding of all the device addresses
+detected on the bus:
 
+    device address: [8-byte address]. First byte is non-zero family code.
+
+The stream size is reported as 0, since it is variable and is not known ahead of time until the devices have
+been enumerated.
 
 OneWireTempSensor
 ^^^^^^^^^^^^^^^^^
@@ -673,11 +682,13 @@ OneWireTempSensor
 Current Ticks
 ^^^^^^^^^^^^^
 (NB: this is mainly for testing and may later be removed.)
-A readable value that provides a 2-byte (big-endian) value that is the number of milliseconds elapsed since the controller
+A readable value that provides a 4-byte (little-endian) value that is the number of milliseconds elapsed since the controller
 started.
 
     type: 0x03
     len: 0
+
+
 
 
 Dynamic Container
@@ -697,31 +708,48 @@ A value that is made persistent.
 The initial data provides during construction provides the size of the datablock (which cannot be changed) and
 the initial value for the data. Reads and writes to this value must always be the same size.
 
-Profile
-^^^^^^^
-A profile computes a value based on a number of (time,value) points. The value is interpolated from the two nearest
-time points. A profile can contain a maximum of 16 data points.
+Value Profile
+^^^^^^^^^^^^^
+A value profile computes a value based on a number of (time,value) points.
+The value is interpolated from the two nearest time points. Future extensions might use NURBS or other smoothing
+algorithms.
 
     type: 0x06
-    len: (N+1) * 4 + id_chain
-    format:
-        4-bytes of 0x00
+    len: (N) * 4 + 3
+    descriptor:
+        3-bytes of 0x00 (reserved)
         for each of N time,value points (0..N-1):
-            uint16_t time (in minutes)
-            uint16_t value (arbitrary)
-        id_chain where profile result should be stored
+            uint16_t time  (in minutes)
+            int16_t value
 
-When reading/writing the profile, the format is the same as above, but now the first 4 bytes are defined:
-        byte 0: SSSSIIXR
-            SSSS    - 4-bits encoding the current profile step (0-15)
+The profile exposes a container interface with 2 values:
+
+The first value (index 0) is a read/write value with a similar format as the definition format, but now the first 3 bytes are defined:
+        byte 0: SSSSSRII
+            SSSS    - 5-bits encoding the current profile step (0-16)
+            R       - running (0, stopped, 1 running)
             II      - 2 bits encoding the interpolation type (00=none, 01=linear, 10=smooth, 11, smoother.)
-            X       - reserved (set to 0)
-            R       - running
 
-        bytes 1-2:  - current time duration into current step (in minutes)
+        bytes 1-2:  - current time duration into current step (unsigned, in minutes)
+        bytes 3-3+(N*4) - N * (time,value) settings
 
-By using a write-mask command, parts of the block can be selectively updated. In particular,
-the step should not be changed, so the mask 0x0F should be used for the first byte.
+The data written is persisted to eeprom, so updates should not be too frequent. (In practice, changes are only needed
+when changing the profile.)
+
+The second value (index 1) in the container is a read only object and provides the current profile value:
+
+        bytes 0-1 - the current profile value.
+
+By using a write-mask command, parts of the profile definition (contained object 0) can be selectively updated. For example,
+the step should not normally be changed, so the mask 0x07 should be used for the first byte.
+
+To change the profile, the client code has the option to make changes to the profile in place by writing to the first
+object in thew container.
+
+This works if sufficient steps were allocated or if change can be done in place. if more steps are needed,
+the code can create a new profile. The use of the write mask avoids a read/update cycle - the update can be applied
+in one hit (and is then essentially atomic.)
+
 
 
 PersistChangeValue
@@ -737,6 +765,22 @@ Reading and writing are done on a 2-byte big endian value which sets the current
 is more than the threshold difference from the last persisted value,
 
 
+Indirect Value
+^^^^^^^^^^^^^^
+An indirect value works similarly to a pointer in C. It's used when you have a container into which you need to insert
+a value as a specific index, but the value is already placed in some other container. The solution is to create
+a IndirectValue in the target container, which is created with the id_chain of the source value.
+
+type: 0x0D
+length: variable
+bytes 0..N: encoded id chain of the target value.
+
+The value supports reading and optionally writing if the the target value (the id_chain provided as the object definition)
+is writable.
+
+
+
+
 Designing New Objects
 ---------------------
 
@@ -745,6 +789,8 @@ Some guidelines:
 - if an object's property/value is immutable and specified in the creation arguments, it may not be necessary to make the
   object a container and expose the property as a sub-value. Instead, clients can retrieve the original value by listing
   the object definition.
+
+
 
 
 Refactor docs after this point.
@@ -1085,7 +1131,6 @@ The read values/write values replace much of the existing functionality
   *  U{} - define a device - replaced by the general Add object function.
 
 
-
 Destroying Objects
 ------------------
 
@@ -1196,20 +1241,6 @@ create  - create an object and store in the specified container (default is top 
 enumerate object - walk the entire object hierarchy to enumerate each object
 the handler will do something, e.g. look for cached values and reset them
 
-Persistent Values
------------------
-
-In addition to object construction being stored in persistent storage, object configuration can also be persisted.
-
-Approaches:
-
-1. create a EepromPersistedValue that writes to byte-updatable eeprom. For efficient reads and less-frequent writes
-   the value may be fronted by a cache.
-
-2. for multiple configuration values, maintain them as a separate object that implements the container interface.
-   Individual values can be set, and the whole updated if there have been changes.
-   This seems to imply the application lifecycle - init/prepare/read/cleanup for each discrete step.
-
 
 Templates/Recipes
 -----------------
@@ -1218,7 +1249,13 @@ each instance of the controller required (e.g. each fridge), it would be nice to
 These define input and outputs to the whole recipe and hide the internal objects used and complexity of the wiring.
 This reuse may save eeprom space.
 
-It's not clear yet if these recipes should exist on the arduino or externally.
+It's not clear yet if these recipes should exist on the arduino or externally. Update: they should be external.
+Much easier to manage and less code. If they are stored in the arduino, it is implemented as a new objec type that
+take's a custom construction definition block, and then creates the required sub-objects and exposes them either
+via the container interface or as a composite read value which is decoded in the controller.
+
+
+
 
 
 Version
@@ -1259,6 +1296,65 @@ Feature: Process variable with display
         The display shows 42.0 at the top left
 
 
+Design Notes on Profile
+-----------------------
+Can't decide if the profile should expose the value as part of the read/write interface, or should push the value
+to some other object.
+
+if controller uses an object reference
+- not immediately aware of changes (which may be relevant to help avoid a large D when SV changes.). To see changes
+    it will have to maintain a lastValue. With a value setter, it has both the old value and the new value and can compute
+        the difference right there.
+    not a biggie - the controller just has to maintain the last value read to compute deltas.
+
+- changing mode?
+    change the SV object reference. (requires also a change to eeprom - the id_chain should then be the same length.)
+    this is mainly about setting the SV for fridge temp. In fridge mode it's a simple value/profile,
+    in beer mode, it's a PID value from the aggregate setpoints of the carboys.
+- logging:
+    the value is logged as some other value, external code has to keep track of the relationship.
+
+if controller uses it's own internal value (exposed as a container)
+- can be aware of changes immediately since it implements the write() method and compute the delta so that this can be
+    compensated for
+- changing mode
+    this is someone else's problem. the controller just cares about the SV value
+    e.g. a composite mode object that wraps a simple value (fridge value), a profile (fridge profile) or the contained beers PID value
+    easier to change mode since it's just a single byte change for the mode state in eeprom.
 
 
+A pid controller: as a container:
+    the needed external items (actuator/sensors) are made available as contained references. They can be instantiated in place
+    or they can be instantiated externally and use a proxy.
+    + easy to change sensors/actuators (direct or proxy) without rebuilding the controller
+    + separation of config values vs. logged values
 
+    item 0: PWM actuator to reduce value        (default is NULL)
+    item 1: PWM actuator to increase value      (default is NULL)
+    item 2: parameters:         a EepromValue object not logged, with a local interface to retrieve specific parameter values
+        Kp, Ki, Kd values
+        min, max values
+        pidMax value
+        idle, mode (off, on)
+
+    item 3: SV - the set value
+               - this can be a contained value since it's updated after the controller. easy to change
+
+    item 4: PV (e.g. temp sensor)
+        if this is a contained value then the prepare/update cycle will prepare the controller before the sensor, but
+                    update always happens after prepare so the sensor value will be read.
+        if decoupling is needed, a proxy value, that wraps the target value can be used (e.g. temp sensor lifetime longer
+                                    than controller lifetime.)
+
+Want to have a control loop to run as fast as possible? with sensors providing output
+have a 1 second trigger to log values and fetch new temps?
+
+use case: pressure controller, water fill controller etc - may need to respond much quicker
+avoids inner loop to process serial commands (cleaner), no side affects between prepare/update.
+use
+
+does the loop need a delay?
+maybe not. but some operations may need to be done on a timer
+ - logging
+ - update display
+ - etc...
