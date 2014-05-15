@@ -94,6 +94,8 @@ This is a generic container object that contains all top-level objects.
 Since these top-level objects can also be containers, the system can be used to build nested containment,
 i.e. a hierarchy.
 
+The root container is created as part of a system profile - each system profile has it's own root container.
+
 
 Object IDs
 ----------
@@ -136,16 +138,13 @@ System Profile
 The system allows multiple configurations to be stored in eeprom. Each configuration corresponds logically to a distinct
 root container.
 
-The first time the system boots (or if it doesn't recognise the data in eeprom) the system initializes with one
-system profile that is active. (Profile id 0.)
-The system is ready to receive create object commands to build the object hierarchy.
-
-The id of the currently active profile is made available as a Active Profile Value object at index 0 of the root
-container.
-The value can be read to find the id of currently active profile (or <0 for no active profile).
-The value can be written to activate a different profile (id>=0) or activate no profile (id<0).
+There are commands to retrieve the active profile and the list of available profiles, as well as commands to create
+and delete profiles.
 
 The last activated profile is persisted, so that on reboot the same profile is activated.
+
+While a profile is "open" new objects can be created in it. A profile is open from the time it is created until
+another profile is created.
 
 The create profile command is used to create a new profile. The profile is not activated until the
 When a new profile is created, any currently active profile (the root container) is then marked as closed.
@@ -159,16 +158,16 @@ On startup the system waits X [TODO] seconds before loading the last activated p
 The external code can stop this from happening by sending a activate profile command, specifying profile id -1.
 This prevents the profile from being loaded.
 
+
 System Objects
 ^^^^^^^^^^^^^^
 Regular user-space objects are stored with a profile and created/removed by the user. In contrast, system objects
 are not bound to any profile but to the controller itself. These system objects are created by the controller.
 Most are typically read only with only a few being writable in some cases.
 
-Like user objects, system objects are
+Like user objects, system objects are readable and writable. However, system objects cannot be created or destroyed.
 
 The commands associated with system objects are:
-
  - read system object
  - write system object
  - list system objects ?? (Not sure if this is needed.)
@@ -181,7 +180,7 @@ in the system object space:
 
  - 0: device id. Some devices have an intrinsic ID while others do not. Also, the number of bytes in the ID may vary.
     Concretely, for an arduino, it is assumed to be always used with the localhost, so the id is a single byte.
-    For a spark core, the internal ID is retrieved.
+    For a spark core, the internal ID (16-hex digits?) will be retrieved.
 
 
 Comms Interface Format
@@ -194,8 +193,9 @@ The comms interface format has been chosen to be both readable (to developers) a
 * annotations delimiters [ ] can be freely inserted (they and the contents between are ignored)
 * chunk-based newlines terminate the command.
 
-The core data format used by the embedded device is binary, but it is transmitted as ASCII to avoid encoding issues
-and to make it representable on a terminal. Furthermore, text strings can be liberally inserted
+The core data format used by the embedded device internally is binary, but it is transmitted as ASCII to avoid encoding
+issues and to make it representable on a terminal. Furthermore, text strings can be liberally inserted by using
+annotation delimiters.
 
 A newline is used to terminate a block (a command). Not only does this help with readability, but also ensures that
 the system can recover from a dropped byte or synchronization problem from the start of the next command.
@@ -225,15 +225,17 @@ These commands are supported::
     CMD_FREE_SLOT = 6,          // retrieves the next free slot in a container
     CMD_CREATE_PROFILE = 7,     // create a new profile
     CMD_DELETE_PROFILE = 8,     // delete a profile
-    CMD_ACTIVATE_PROFILE = 9,    // compact storage in eeprom for the current profile
+    CMD_ACTIVATE_PROFILE = 9,   // activate a profile
     CMD_LOG_VALUES = 10,        // log values from the selected container
     CMD_RESET = 11,             // reset the device
     CMD_FREE_SLOT_ROOT = 12,    // find the next free slot in the root container
     CMD_UNUSED = 13,            // unused
-    CMD_LIST_PROFILES = 14,     // list the define profile IDs
+    CMD_LIST_PROFILES = 14,     // list the define profile IDs and the active profile
     CMD_READ_SYSTEM_VALUE = 15, // read the value of a system object
     CMD_SET_SYSTEM_VALUE = 16,  // write the value of a system object
     CMD_SET_MASK_VALUE = 17,    // write the value of a user object with a mask to preserve some of the original data
+
+Each command is described in more detail below.
 
 
 Representation of IDs
@@ -469,13 +471,14 @@ Command Response::
 
     0x0A    log values command id
     flags   from request
-    [id*]   optional id from reqquest
+    [id*]   optional id from request
     repeat
-        id      variable length ID
+        id      variable length ID chain
         size    length of the next datablock. Will be 0 for if id does not identify a valid readable value.
         data[size]  the value
 
 The response data is the same as the read values command.
+
 
 Reset
 ^^^^^
@@ -484,13 +487,13 @@ Forces the device to reset.
 Command request::
 
     0x0B    reset command
-    flags   if 0, the eeprom is left untouched. if 1, the eeprom is erased prior to reset.
-            add 2 to perform a hard-reset after the command has executed.
+    flags   if 0, the eeprom is left untouched. if 1, the eeprom is erased.
+            add 2 to perform a hard-reset after the command has executed. Hence, sending 0 for flags does nothing.
 
 Response::
     0x0B    reset command
     flags
-    0x00    confirmation of reset
+    0x00    confirmation of command execution.
 
 The eeprom is erased and the response returned before the device is reset.
 
@@ -518,8 +521,8 @@ Command Request::
 
 Command Response::
 
-    0x0E    list profiles command
-    activate    The active profile id
+    0x0E        list profiles command
+    active      The active profile id, >=0x80 if no active profile
     [id]        a list of profile ids that are defined
 
 
@@ -527,7 +530,7 @@ Read System Value
 -----------------
 Reads the value of a system object in the system root container. System objects are stored outside of the normal profile
 space. For example, the unique ID of a device is stored in the system root container. System objects are instantiated
-automatically by the system.
+automatically by the system at startup.
 
 Apart from the changed command ID, the syntax for this command is identical to the read value command (0x01).
 
@@ -552,10 +555,6 @@ Write System Value
 ------------------
 Writes the value of a system object. The syntax for this command is identical to the write value command, apart from a
 change in command ID.
-
-Write Value Command
-^^^^^^^^^^^^^^^^^^^
-A write command can write multiple values at once. The last value is followed by newline, like in all other commands.
 
 Command request::
 
@@ -689,8 +688,6 @@ started.
     len: 0
 
 
-
-
 Dynamic Container
 ^^^^^^^^^^^^^^^^^
 A container that dynamically resizes as elements are added.
@@ -758,11 +755,17 @@ This is a 2-byte value that is stored in memory, and persisted to eeprom when th
 value and the last value stored is greater than a threshold.
 
     type: 0x09
-    bytes 0-1: 16-bit value (big-endian) This is the initial value.
-    bytes 2-3: 16 bit threshold (bit-endian) for saving changes
+    bytes 0-1: 16-bit value (little-endian) This is the initial value.
+    bytes 2-3: 16 bit threshold (little-endian) for saving changes
 
-Reading and writing are done on a 2-byte big endian value which sets the current value. If the current value
-is more than the threshold difference from the last persisted value,
+Reading and writing are done on a 2-byte little endian value which sets the current value. If the current value
+is more than the threshold difference from the last persisted value, then the persisted value is updated.
+This is a simple form of wear-prevention for flash and eeprom devices in cases where a value is updated often, but
+typically with small changes that are not significant.
+
+(TODO: this may not be needed and is a result of emulating how the beer temp was updated externally and persisted
+in the old codebase. The new code may use a locally stored profile via ValueProfile object which computes the current
+value and manages it's own persistence.)
 
 
 Indirect Value
@@ -771,9 +774,9 @@ An indirect value works similarly to a pointer in C. It's used when you have a c
 a value as a specific index, but the value is already placed in some other container. The solution is to create
 a IndirectValue in the target container, which is created with the id_chain of the source value.
 
-type: 0x0D
-length: variable
-bytes 0..N: encoded id chain of the target value.
+    type: 0x0D
+    length: variable
+    bytes 0..N: encoded id chain of the target value.
 
 The value supports reading and optionally writing if the the target value (the id_chain provided as the object definition)
 is writable.
@@ -789,6 +792,51 @@ Some guidelines:
 - if an object's property/value is immutable and specified in the creation arguments, it may not be necessary to make the
   object a container and expose the property as a sub-value. Instead, clients can retrieve the original value by listing
   the object definition.
+
+
+
+System Root Container
+---------------------
+The system root container contains system objects is automatically provided by the system and instantiated on startup.
+Objects in the system root can be read and some written. The system root is not an open container, so new objects
+cannot be added, nor existing ones deleted.
+
+System objects are read and written with the "read system object" and "write system object" commands.
+
+These system objects are defined:
+
+Slot 0 - Device ID
+^^^^^^^^^^^^^^^^^^
+On the Arduino, this is 1-byte readable and writable value. The default value with a fresh eeprom is 0xFF. The local
+connector assigns a new, unique id to Arduinos when the id has not been assigned (read as the default value).
+
+
+Slot 1 - ScaledTicksValue
+^^^^^^^^^^^^^^^^^^^^^^^^^
+This provides the current system time. Normally, this runs in real time. For testing, simulation or amusement the
+time can be paused/resumed and scaled faster or slower than actual time.
+
+The read data is 6 bytes:
+
+    0x00    current scaled time as milliseconds since power on (32-bit unsigned, little-endian)
+    0x04    scale - time compression factor. 0 stops time. 1 is normal time, 2+ is accelerated time. (16-bit signed.
+            Negative values are reserved.)
+    0x06    (end)
+
+The write data is 6 bytes:
+
+    0x00    start point - the number of actual milliseconds to consider time 0. (32-bit unsigned, little-endian)
+    0x04    scale - (same as for read)
+    0x06    (end)
+
+The scale can be used to stop time (scale=0), to run normally (scale=1) or to accelerate time (scale=2).
+(At present, time slowdown is not implemented. A future extension could allow time slowdown by using the MSB of the
+scale to indicate that it should be treated as a fraction from [0,1) - the fractional value for scale -x being
+x/2^15.)
+
+The offset can be used to advance time to a specific point. It's subtracted from the real time before applying the scale.
+
+Neither the current time, offset or scale are persisted to eeprom. On restart, time runs as normal.
 
 
 
@@ -1358,3 +1406,62 @@ maybe not. but some operations may need to be done on a timer
  - logging
  - update display
  - etc...
+
+
+Connectivity
+------------
+
+Have two opposing goals:
+1. have the connector expose a http endpoint itself so that clients with access can directly work with the devices
+managed by the connector. This will facilitate testing and hacking together simple solution that don't require the
+brewpi service.
+
+2. have the brewpi service be able to use the connector. This will not work with the connector exposing a http endpoint
+since this is likely behind a NAT. HTTP protocol has to be outbound (client to server). We can do this either by implementing
+a http client on top of the internal update notifications in the connector, or on top of the HTTP endpoint. Logically
+ both are equivalent, but doing it direct might be more efficient.
+
+ The connector endoint is a RESTful endpoint that exposes the object hierarchy:
+
+ controller
+ - lists all known controllers
+ - source for change events
+
+controller/{@id}
+ - lists the details about a controller (local connection type, board type, protocol revision)
+ - connect/disconnect events
+
+controller/{@id}/s/
+ - system root container space
+ - lists all slots available
+
+controller/{@id}/s/1
+ - system object slot 1
+
+controller/{@id}/p
+ - user profiles
+ - GET lists the profile IDs that are valid, including the active profile
+ - DELETE deletes all profiles
+ - POST create a new profile - response body is location of new profile
+
+controller/{@id}/p/{@pid}
+ - the profile at the given ID
+ - GET lists the objects in the profile (object type and location)
+ - DELETE removes the profile (and all contained objects)
+
+
+controller/{@id}/p/active
+ - link to active profile
+
+controller/{@id}/active/<container-id>
+ - GET lists the contents of the container - the indexes and object types
+ - POST (with object type and definition) creates a new object at some arbitrary index
+
+ An object endpoint:
+ controller/{@id}/active/1/2/3/value
+ GET retrieves the current value for the object at that location (via read)
+ POST updates the current value (for writable objects)
+
+
+
+
