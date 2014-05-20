@@ -829,12 +829,13 @@ The write data is 6 bytes:
     0x04    scale - (same as for read)
     0x06    (end)
 
-The scale can be used to stop time (scale=0), to run normally (scale=1) or to accelerate time (scale=2).
+The scale can be used to stop time (scale=0), to run normally (scale=1) or to accelerate time (scale>=2).
 (At present, time slowdown is not implemented. A future extension could allow time slowdown by using the MSB of the
 scale to indicate that it should be treated as a fraction from [0,1) - the fractional value for scale -x being
 x/2^15.)
 
 The offset can be used to advance time to a specific point. It's subtracted from the real time before applying the scale.
+This allows manual stepping through time by successively updating the offset.
 
 Neither the current time, offset or scale are persisted to eeprom. On restart, time runs as normal.
 
